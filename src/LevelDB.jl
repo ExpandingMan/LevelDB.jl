@@ -1,374 +1,267 @@
 module LevelDB
 
-using BinDeps
+include("Lib.jl")
+using .Lib
+using .Lib: ldbcall
 
-depsfile = joinpath(dirname(pathof(LevelDB)), "..", "deps", "deps.jl")
-if isfile(depsfile)
-    include(depsfile)
-else
-    error("LevelDB not properly installed. Please run Pkg.build(\"LevelDB\")")
+
+const AbstractVecOrString = Union{AbstractVector{UInt8},AbstractString}
+const VecOrString = Union{Vector{UInt8},String}
+const IteratorTypes = Union{typeof(keys),typeof(values),typeof(pairs)}
+
+
+version() = VersionNumber(leveldb_major_version(), leveldb_minor_version(), 0)
+
+
+mutable struct DBOptions
+    handle::Ptr{leveldb_options_t}
+
+    DBOptions(h::Ptr) = finalizer(x -> leveldb_options_destroy(x.handle), new(h))
 end
 
-include("libleveldb_common.jl")
-include("libleveldb_api.jl")
-
-macro destroy_if_not_null(f, ptr)
-    esc(quote
-          if $ptr != C_NULL
-          $f($ptr)
-          $ptr = C_NULL
+function DBOptions(;kw...)
+    h = leveldb_options_create()  # doesn't support error
+    for (k, v) ∈ pairs(kw)
+        #TODO: more
+        if k == :error_if_exists
+            leveldb_options_set_error_if_exists(h, Bool(v))
+        elseif k == :create_if_missing
+            leveldb_options_set_create_if_missing(h, Bool(v))
+        else
+            throw(ArgumentError("LevelDB options got unsupported keyword $k"))
         end
-    end)
-end
-
-macro check_err_ref(f, g = :())
-    esc(quote
-          err_ref = Ref{Cstring}(C_NULL)
-
-          $f
-
-          err_ptr = err_ref[]
-          if err_ptr != C_NULL
-              err_msg = err_ptr |> unsafe_string
-              leveldb_free(convert(Ptr{Nothing}, err_ptr))
-
-              $g
-
-              error(err_msg)
-          end
-    end)
-end
-
-# This needs to be mutable, because handle == C_NULL is used to avoid double
-# free
-mutable struct DB
-    dir           :: String
-    handle        :: Ptr{leveldb_t}
-    options       :: Ptr{leveldb_options_t}
-    write_options :: Ptr{leveldb_writeoptions_t}
-    read_options  :: Ptr{leveldb_readoptions_t}
-end
-
-"""
-    LevelDB.DB(file_path; create_if_missing = false, error_if_exists = false)::LevelDB.DB
-
-Opens or creates a `LevelDB` database at `file_path`.
-
-# Parameters
-- `file_path::String`: The full path to a directory that hosts a `LevelDB` database.
-- `create_if_missing::Bool`: When `true` the database will be created if it does not exist.
-- `error_if_exists::Bool`: When `true` an error will be thrown if the database already exists.
-
-# Example
-    db = LevelDB.DB(mktemp())
-    db[[0x01]] = [0x0a]
-    db[[0x02]] = [0x0b]
-
-    db[[0x01]] # returns [0x0a]
-
-    close(db)
-"""
-function DB(
-        dir               :: String;
-        create_if_missing :: Bool = false,
-        error_if_exists   :: Bool = false
-    )
-    options = _leveldb_options_create(create_if_missing = create_if_missing,
-                                      error_if_exists   = error_if_exists)
-    write_options = _leveldb_writeoptions_create()
-    read_options  = _leveldb_readoptions_create()
-
-    @check_err_ref handle = leveldb_open(options, dir, err_ref) begin
-        leveldb_options_destroy(options)
-        leveldb_writeoptions_destroy(write_options)
-        leveldb_readoptions_destroy(read_options)
     end
-
-    @assert        handle != C_NULL
-    @assert       options != C_NULL
-    @assert write_options != C_NULL
-    @assert  read_options != C_NULL
-
-    db = DB(dir, handle, options, write_options, read_options)
-
-    return db
+    DBOptions(h)
 end
 
-function _leveldb_options_create(
-    ;
-    error_if_exists = false,
-    create_if_missing = false
-)
-    o = leveldb_options_create()
 
-    ## These are the possible options, TODO: figure out what they mean and add
-    ## them one by one
-    # leveldb_options_set_block_restart_interval
-    ### adjacent keys are stored in blocks (default: ~4096 uncompressed bytes). Bulk scans are faster with larger blocks, point reads of small values benefit from smaller block sizes.
-    # leveldb_options_set_block_size
-    ### cache frequently used blocks uncompressed block contents
-    # leveldb_options_set_cache
-    ### set the comparator that determines ordering of keys
-    # leveldb_options_set_comparator
-    ### Default: with compression
-    # leveldb_options_set_compression
-    # leveldb_options_set_max_open_files
-    ### throw and error if DB exists
-    # leveldb_options_set_error_if_exists
-    ### create the DB if true
-    # leveldb_options_set_create_if_missing
-    # leveldb_options_set_write_buffer_size
-    ### a filter policy can reduce the number of disk reads (a bloom filter with 10 bits/key reduces get reads for get calls by a factor of ~100)
-    # leveldb_options_set_filter_policy
-    ### raise an error as soon as internal corruption is detected, default: off
-    # leveldb_options_set_paranoid_checks
-    ### file operations are routed through and Env object
-    # leveldb_options_set_env
-    # leveldb_options_set_info_log
+mutable struct WriteOptions
+    handle::Ptr{leveldb_writeoptions_t}
 
-    leveldb_options_set_error_if_exists(o, error_if_exists)
-    leveldb_options_set_create_if_missing(o, create_if_missing)
-
-    return o
+    WriteOptions(h::Ptr) = finalizer(x -> leveldb_writeoptions_destroy(x.handle), new(h))
 end
 
-function _leveldb_writeoptions_create()
-    o = leveldb_writeoptions_create()
-
-    ## These are the possible options, TODO: figure out what they mean and add
-    ## them one by one
-
-    ### asynchronous writing (default) is much faster but in case of a crash some data may be lost
-    # leveldb_writeoptions_set_sync
-
-    return o
+function WriteOptions(;kw...)
+    h = leveldb_writeoptions_create()
+    for (k, v) ∈ pairs(kw)
+        if false
+            #TODO: more!
+        else
+            throw(ArgumentError("LevelDB write options got unsupported keyword $k"))
+        end
+    end
+    WriteOptions(h)
 end
 
-function _leveldb_readoptions_create()
-    o = leveldb_readoptions_create()
 
-    ## These are the possible options, TODO: figure out what they mean and add
-    ## them one by one
-    ### for disabling caching temporarily during bulk reads to avoid displacing data in cache
-    # leveldb_readoptions_set_fill_cache
-    ### snapshots are readonly views of a version of the DB, if NULL it is the current state. There are GetSnapshot and ReleaseSnapshot methods
-    # leveldb_readoptions_set_snapshot
-    ### if true forces checksum verification for all data reads, default is false
-    # leveldb_readoptions_set_verify_checksums
+mutable struct ReadOptions
+    handle::Ptr{leveldb_readoptions_t}
 
-    return o
+    ReadOptions(h::Ptr) = finalizer(x -> leveldb_readoptions_destroy(x.handle), new(h))
 end
 
-Base.isopen(db::DB) = db.handle != C_NULL
-
-function Base.close(db::DB)
-    @destroy_if_not_null leveldb_close                db.handle
-    @destroy_if_not_null leveldb_options_destroy      db.options
-    @destroy_if_not_null leveldb_writeoptions_destroy db.write_options
-    @destroy_if_not_null leveldb_readoptions_destroy  db.read_options
+function ReadOptions(;kw...)
+    h = leveldb_readoptions_create()
+    for (k, v) ∈ pairs(kw)
+        if false
+            #TODO: more!
+        else
+            throw(ArgumentError("LevelDB write options got unsupported keyword $k"))
+        end
+    end
+    ReadOptions(h)
 end
+
+
+mutable struct DB{K<:VecOrString,V<:VecOrString}
+    path::String
+    handle::Ptr{leveldb_t}
+
+    DB{K,V}(path::AbstractString, h::Ptr) where {K,V} = finalizer(close, new{K,V}(path, h))
+end
+
+function DB{K,V}(path::AbstractString, opts::DBOptions) where {K,V}
+    h = ldbcall(leveldb_open, opts.handle, path)
+    DB{K,V}(path, h)
+end
+
+DB{K,V}(path::AbstractString; kw...) where {K,V} = DB{K,V}(path, DBOptions(;kw...))
+
+DB(path::AbstractString; kw...) = DB{String,Vector{UInt8}}(path; kw...)
 
 function Base.show(io::IO, db::DB)
-    print(io, "LevelDB: ", db.dir)
+    show(io, typeof(db))
+    print(io, "(")
+    show(io, db.path)
+    print(io, ")")
 end
 
-function Base.getindex(db::DB, i::Vector{UInt8})
-    val_size = Ref{Csize_t}(0)
-    @check_err_ref res_ptr = leveldb_get(db.handle, db.read_options,
-                                         pointer(i), length(i),
-                                         val_size, err_ref)
+function Base.close(db::DB)
+    leveldb_close(db.handle)
+    db.handle == C_NULL
+    nothing
+end
 
-    size = val_size[]
-    if size == 0
-        throw(KeyError(i))
+Base.isopen(db::DB) = (db.handle ≠ C_NULL)
+
+_checkopen(db::DB) = isopen(db) || error("operations on closed LevelDB database are forbidden")
+
+_normalizekeyval(v::AbstractVector) = convert(Vector{UInt8}, v) 
+_normalizekeyval(v::AbstractString) = _normalizekeyval(codeunits(v))
+
+function Base.setindex!(db::DB, v::AbstractVecOrString, k::AbstractVecOrString, opts::WriteOptions)
+    _checkopen(db)
+    k = _normalizekeyval(k)
+    v = _normalizekeyval(v)
+    ldbcall(leveldb_put, db.handle, opts.handle, k, length(k), v, length(v)) 
+end
+Base.setindex!(db::DB, v::AbstractVecOrString, k::AbstractVecOrString; kw...) = setindex!(db, v, k, WriteOptions(;kw...))
+
+function Base.getindex(db::DB, k::AbstractVecOrString, ::Type{Vector{UInt8}}, opts::ReadOptions)::Vector{UInt8}
+    _checkopen(db)
+    k = _normalizekeyval(k)
+    olen = Ref{Csize_t}()
+    o = ldbcall(leveldb_get, db.handle, opts.handle, k, length(k), olen)
+    unsafe_wrap(Array, o, olen[], own=true)
+end
+function Base.getindex(db::DB, k::AbstractVecOrString, ::Type{String}, opts::ReadOptions)::String
+    String(getindex(db, k, Vector{UInt8}, opts))
+end
+function Base.getindex(db, k::AbstractVecOrString, ::Type{T}; kw...) where {T}
+    getindex(db, k, T, ReadOptions(;kw...))
+end
+Base.getindex(db::DB{K,V}, k::AbstractVecOrString; kw...) where {K,V} = getindex(db, k, V; kw...)
+
+function Base.delete!(db::DB, k::AbstractVecOrString, opts::WriteOptions)
+    k = _normalizekeyval(k)
+    ldbcall(leveldb_delete, db.handle, opts.handle, k, length(k))
+end
+Base.delete!(db::DB, k::AbstractVecOrString; kw...) = delete!(db, k, WriteOptions(;kw...))
+
+
+mutable struct Iterator{R<:IteratorTypes,K<:VecOrString,V<:VecOrString}
+    handle::Ptr{leveldb_iterator_t}
+    db::DB  # we need this reference to keep from getting GC'd; don't care about types
+
+    function Iterator{R,K,V}(h::Ptr, db::DB) where {R,K,V}
+        finalizer(x -> leveldb_iter_destroy(x.handle), new{R,K,V}(h, db))
     end
-
-    @assert val_size != C_NULL
-    @assert res_ptr != C_NULL
-
-    res_ptr_uint8 = convert(Ptr{UInt8}, res_ptr)
-
-    # NOTE: we own the memory, in theory libleveldb has to free `res_ptr`.
-    unsafe_wrap(Vector{UInt8}, res_ptr_uint8, (size, ), own = true)
 end
 
-function Base.setindex!(db::DB, v::Vector{UInt8}, i::Vector{UInt8})
-    @check_err_ref leveldb_put(db.handle, db.write_options,
-                               pointer(i), length(i),
-                               pointer(v), length(v),
-                               err_ref)
-    return v
+function Iterator{R,K,V}(db::DB, opts::ReadOptions) where {R,K,V}
+    isopen(db) || error("tried to create iterator from closed database")
+    h = leveldb_create_iterator(db.handle, opts.handle)
+    R ∈ typeof.((keys, values, pairs)) || throw(ArgumentError("invalid iterator type $R"))
+    o = Iterator{R,K,V}(h, db)
+    seekstart(o)  # don't know why they start this out in an invalid state
+    o
 end
 
-function Base.delete!(db::DB, i::Vector{UInt8})
-    @check_err_ref leveldb_delete(db.handle, db.write_options,
-                                  pointer(i), length(i),
-                                  err_ref)
-    return db
+Iterator{R,K,V}(db; kw...) where {R,K,V} = Iterator{R,K,V}(db, ReadOptions(;kw...))
+Iterator(db::DB{K,V}, r=pairs; kw...) where {K,V} = Iterator{typeof(r),K,V}(db; kw...)
+
+function Base.show(io::IO, itr::Iterator)
+    show(io, typeof(itr))
+    print(io, "()")
 end
 
-function Base.delete!(db, idxs)
-    for i in idxs
-        delete!(db, i)
+for 𝒻 ∈ (:keys, :values, :pairs)
+    @eval Base.$𝒻(db::DB; kw...) = Iterator(db, $𝒻; kw...)
+end
+
+function isvalidstate(itr::Iterator)
+    _checkopen(itr.db)
+    Bool(leveldb_iter_valid(itr.handle))
+end
+
+function next!(itr::Iterator)
+    _checkopen(itr.db)
+    leveldb_iter_next(itr.handle)
+    isvalidstate(itr)
+end
+
+function prev!(itr::Iterator)
+    _checkopen(itr.db)
+    leveldb_iter_prev(itr.handle)
+    isvalidstate(itr)
+end
+
+function Base.seekstart(itr::Iterator)
+    _checkopen(itr.db)
+    leveldb_iter_seek_to_first(itr.handle)
+end
+function Base.seekend(itr::Iterator)
+    _checkopen(itr.db)
+    leveldb_iter_seek_to_last(itr.handle)
+end
+
+function Base.seek(itr::Iterator, k::AbstractVecOrString)
+    _checkopen(itr.db)
+    k = _normalizekeyval(k)
+    leveldb_iter_seek(itr.handle, k, length(k))
+    isvalidstate(itr)
+end
+
+function Base.getkey(itr::Iterator, ::Type{Vector{UInt8}})::Union{Nothing,Vector{UInt8}}
+    _checkopen(itr.db)
+    isvalidstate(itr) || return nothing
+    klen = Ref{Csize_t}()
+    k = leveldb_iter_key(itr.handle, klen)  # this apparently borrows k
+    GC.@preserve k begin
+        o = Vector{UInt8}(undef, klen[])
+        unsafe_copyto!(pointer(o), convert(Ptr{UInt8}, k), klen[])
     end
-
-    return db
+    o
 end
+function Base.getkey(itr::Iterator, ::Type{String})
+    o = getkey(itr, Vector{UInt8})
+    isnothing(o) ? o : String(o)
+end
+Base.getkey(itr::Iterator{R,K,V}) where {R,K,V} = getkey(itr, K)
 
-function Base.setindex!(db::DB, v, k)
-    batch = leveldb_writebatch_create()
-
-    for (kk, vv) in zip(k, v)
-        leveldb_writebatch_put(batch,
-                               pointer(kk), length(kk),
-                               pointer(vv), length(vv))
+function getvalue(itr::Iterator, ::Type{Vector{UInt8}})::Union{Nothing,Vector{UInt8}}
+    _checkopen(itr.db)
+    isvalidstate(itr) || return default
+    vlen = Ref{Csize_t}()
+    v = leveldb_iter_value(itr.handle, vlen)  # this apparently borrows v
+    GC.@preserve v begin
+        o = Vector{UInt8}(undef, vlen[])
+        unsafe_copyto!(pointer(o), convert(Ptr{UInt8}, v), vlen[])
     end
-
-    @check_err_ref leveldb_write(db.handle, db.write_options, batch, err_ref) begin
-        leveldb_writebatch_destroy(batch)
-    end
-
-    leveldb_writebatch_destroy(batch)
+    o
 end
-
-# This needs to be mutable, because handle == C_NULL is used to avoid double
-# free
-abstract type AbstractIterator end
-
-mutable struct Iterator <: AbstractIterator
-    handle :: Ptr{leveldb_iterator_t}
+function getvalue(itr::Iterator, ::Type{String})
+    o = getvalue(itr, Vector{UInt8})
+    isnothing(o) ? o : String(o)
 end
+getvalue(itr::Iterator{R,K,V}) where {R,K,V} = getvalue(itr, V)
 
-
-function Iterator(db::DB)
-    Iterator(leveldb_create_iterator(db.handle, db.read_options))
+function getpair(itr::Iterator, ::Type{Pair{K,V}}) where {K,V}
+    k = getkey(itr, K)
+    isnothing(k) && return nothing
+    k => getvalue(itr, V)
 end
+getpair(itr::Iterator{R,K,V}) where {R,K,V} = getpair(itr, Pair{K,V})
 
-Base.IteratorEltype(::DB) = Vector{UInt8}
-Base.IteratorSize(::DB) = SizeUnknown()
 
-Base.seekstart(it::Iterator) = leveldb_iter_seek_to_first(it.handle)
-# Base.seekend(it::Iterator) = leveldb_iter_seek_to_last(it.handle)
+Base.IteratorSize(::Type{<:Iterator}) = Base.SizeUnknown()
+Base.IteratorEltype(::Type{<:Iterator}) = Base.HasEltype()
 
-Base.close(it::AbstractIterator) = @destroy_if_not_null leveldb_iter_destroy it.handle
+Base.eltype(::Type{<:Iterator{typeof(keys),K,V}}) where {K,V} = K
+Base.eltype(::Type{<:Iterator{typeof(values),K,V}}) where {K,V} = V
+Base.eltype(::Type{<:Iterator{typeof(pairs),K,V}}) where {K,V} = Pair{K,V}
 
-is_valid(it::AbstractIterator) = it.handle != C_NULL && leveldb_iter_valid(it.handle) > 0x00
+getel(itr::Iterator{typeof(keys),K,V}) where {K,V} = getkey(itr)
+getel(itr::Iterator{typeof(values),K,V}) where {K,V} = getvalue(itr)
+getel(itr::Iterator{typeof(pairs),K,V}) where {K,V} = getpair(itr)
 
-function get_key_val(it::AbstractIterator)
-
-    # key
-    key_size = Ref{Csize_t}(0)
-    key_ptr = leveldb_iter_key(it.handle, key_size)
-
-    key_size_val = key_size[]
-    key = Vector{UInt8}(undef, key_size_val)
-    unsafe_copyto!(pointer(key), convert(Ptr{UInt8}, key_ptr), key_size_val)
-
-    # value
-    val_size = Ref{Csize_t}(0)
-    val_ptr = leveldb_iter_value(it.handle, val_size)
-
-    val_size_val = val_size[]
-    val = Vector{UInt8}(undef, val_size_val)
-    unsafe_copyto!(pointer(val), convert(Ptr{UInt8}, val_ptr), val_size_val)
-
-    return key => val
-end
-
-function Base.iterate(db::DB)
-
-    it = Iterator(db)
-    seekstart(it)
-
-    if is_valid(it)
-        kv = get_key_val(it)
-        leveldb_iter_next(it.handle)
-        return  kv, it
+# state is whether we are starting over
+function Base.iterate(itr::Iterator{R,K,V}, state=true) where {R,K,V}
+    state && seekstart(itr)
+    if state ? isvalidstate(itr) : next!(itr)
+        (getel(itr), false)
     else
-        close(it)
-        return nothing
-    end
-end
-
-function Base.iterate(db::DB, it::Iterator)
-    if is_valid(it)
-        kv = get_key_val(it)
-        leveldb_iter_next(it.handle)
-        return kv, it
-    else
-        close(it)
-        return nothing
-    end
-end
-
-
-####################################################
-# iterator that iterates over a range of keys of the DB
-###
-mutable struct RangeIterator <: AbstractIterator
-    handle :: Ptr{leveldb_iterator_t}
-    key_start::Vector{UInt8}
-    key_end::Vector{UInt8}
-end
-
-
-"""
-    LevelDB.RangeView(db::LevelDB.DB, key_start::Vector{UInt8}, key_end::Vector{UInt8})::LevelDB.RangeView
-
-Iterates over a subset of the data base
-
-# Parameters
-- `db::LevelDB.DB`: A `LevelDB.DB` object to iterate over.
-- `key_start::Vector{UInt8}`: Iterate from here.
-- `key_end::Vector{UInt8}`: Iterate until here.
-
-# Example
-    for (key, value) in LevelDB.RangeView(db, [0x01], [0x05])
-        # do something with the key and value
-    end
-"""
-mutable struct RangeView
-    db :: DB
-    key_start::Vector{UInt8}
-    key_end::Vector{UInt8}
-end
-
-Base.IteratorEltype(::RangeView) = Vector{UInt8}
-Base.IteratorSize(::RangeView) = SizeUnknown()
-
-
-is_valid(it::RangeIterator) = it.handle != C_NULL && leveldb_iter_valid(it.handle) > 0x00
-
-function Base.iterate(view::RangeView)
-    it = RangeIterator(
-                       leveldb_create_iterator(view.db.handle, view.db.read_options),
-                       view.key_start, view.key_end)
-
-    leveldb_iter_seek(it.handle, pointer(it.key_start), length(it.key_start))
-    if is_valid(it)
-        kv = get_key_val(it)
-        leveldb_iter_next(it.handle)
-        return kv, it
-    else
-        close(it)
-        return nothing
-    end
-end
-
-
-function Base.iterate(view::RangeView, it::RangeIterator)
-    if is_valid(it)
-        # key is past the range?
-        kv = get_key_val(it)
-        if kv[1] > it.key_end
-            close(it)
-            return nothing
-        else
-            leveldb_iter_next(it.handle)
-            return  kv, it
-        end
-    else
-        return nothing
+        nothing
     end
 end
 

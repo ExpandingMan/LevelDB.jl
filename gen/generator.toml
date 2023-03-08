@@ -1,0 +1,10 @@
+[general]
+library_name = "leveldb"
+output_file_path = "../src/Lib.jl"
+module_name = "Lib"
+jll_pkg_name = "LevelDB_jll"
+export_symbol_prefixes = ["leveldb_"]
+prologue_file_path = "./prologue.jl"
+
+[codegen]
+use_ccall_macro = true
