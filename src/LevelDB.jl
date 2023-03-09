@@ -97,8 +97,9 @@ function Base.show(io::IO, db::DB)
 end
 
 function Base.close(db::DB)
+    db.handle == C_NULL && return nothing
     leveldb_close(db.handle)
-    db.handle == C_NULL
+    db.handle = C_NULL
     nothing
 end
 
@@ -144,7 +145,10 @@ mutable struct Iterator{R<:IteratorTypes,K<:VecOrString,V<:VecOrString}
     db::DB  # we need this reference to keep from getting GC'd; don't care about types
 
     function Iterator{R,K,V}(h::Ptr, db::DB) where {R,K,V}
-        finalizer(x -> leveldb_iter_destroy(x.handle), new{R,K,V}(h, db))
+        finalizer(new{R,K,V}(h, db)) do x
+            # this seems to be correct, but it's not documented
+            isopen(x.db) ? leveldb_iter_destroy(x.handle) : leveldb_free(x.handle)
+        end
     end
 end
 
@@ -165,13 +169,18 @@ function Base.show(io::IO, itr::Iterator)
     print(io, "()")
 end
 
+Base.keys(db::DB{K0,V}, ::Type{K}; kw...) where {K0,V,K} = Iterator{typeof(keys),K,V}(db; kw...)
+Base.values(db::DB{K,V0}, ::Type{V}; kw...) where {K,V0,V} = Iterator{typeof(values),K,V}(db; kw...)
+Base.pairs(db::DB, ::Type{Pair{K,V}}; kw...) where {K,V} = Iterator{typeof(pairs),K,V}(db; kw...)
+
 for 𝒻 ∈ (:keys, :values, :pairs)
     @eval Base.$𝒻(db::DB; kw...) = Iterator(db, $𝒻; kw...)
 end
 
+
 function isvalidstate(itr::Iterator)
     _checkopen(itr.db)
-    Bool(leveldb_iter_valid(itr.handle))
+    leveldb_iter_valid(itr.handle) > 0
 end
 
 function next!(itr::Iterator)

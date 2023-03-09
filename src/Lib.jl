@@ -17,7 +17,6 @@ function ldbcall(f, a...)
     o
 end
 
-
 mutable struct leveldb_t end
 
 mutable struct leveldb_cache_t end
